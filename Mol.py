@@ -21,6 +21,7 @@ class Mol:
 		self.DistMatrix = None # a list of equilbrium distances, for GO-models.
 		self.mbe_order = mbe_order_
 		self.mbe_frags=dict()    # list of  frag of each order N, dic['N'=list of frags]
+		self.dist_mbe_frags=dict()    # list of far away frag of each order N, dic['N'=list of frags], use limiting formula scale into the cutoff and  calculate they
 		self.mbe_frags_deri=dict()
 		self.mbe_permute_frags=dict() # list of all the permuted frags
 		self.mbe_frags_energy=dict()  # MBE energy of each order N, dic['N'= E_N]
@@ -241,7 +242,7 @@ class Mol:
 	def Generate_All_MBE_term(self,  atom_group=1, cutoff=10, center_atom=0):
 		for i in range (1, self.mbe_order+1):
 			self.Generate_MBE_term(i, atom_group, cutoff, center_atom)
-		return  0
+		return  
 
 	def Generate_MBE_term(self, order,  atom_group=1, cutoff=10, center_atom=0):
 		if order in self.mbe_frags.keys():
@@ -259,6 +260,11 @@ class Mol:
 		mbe_dist=[]
 		atomlist=list(range(0,ngroup))		
 
+		dist_mbe_terms = []
+		dist_mbe_terms_num = 0
+		dist_mbe_dist = []
+			
+	
 		if order < 1 :
 			raise Exception("MBE Order Should be Positive")
 		else:	
@@ -268,7 +274,8 @@ class Mol:
 			print ("finished..takes", time_log-time.time(),"second")
 		time_now=time.time()
 		flag = np.zeros(1)
-		max_case = 5000   #  set max cases for debug  
+		max_case = 5000   #  set max cases for debug 
+		dist_max_case = 5000 # set max distance cases for debug 
 		for i in range (0, len(combinations)):
 			term = list(combinations[i])
 			pairs=list(itertools.combinations(term, 2))	
@@ -293,7 +300,6 @@ class Mol:
 				dist[j] = sqrt(pow(xyz[m*atom_group*3+center_atom*3+0]-xyz[n*atom_group*3+center_atom*3+0],2)+pow(xyz[m*atom_group*3+center_atom*3+1]-xyz[n*atom_group*3+center_atom*3+1],2)+pow(xyz[m*atom_group*3+center_atom*3+2]-xyz[n*atom_group*3+center_atom*3+2],2));
 				if (float(dist[j]) > cutoff) {
 					flag[0] = 0;
-					break;
 				}
 			}
 			
@@ -308,6 +314,12 @@ class Mol:
 				mbe_dist.append(dist)
 				if mbe_terms_num >=  max_case:   # just for generating training case
                                         break;
+			else:
+				dist_mbe_terms_num += 1
+				dist_mbe_terms.append(term)
+				dist_mbe_dist.append(dist)
+				if dist_mbe_terms_num >= dist_max_case:
+					break
 
 		mbe_frags = []
 		for i in range (0, mbe_terms_num):
@@ -316,11 +328,22 @@ class Mol:
 			for j in range (0, order):
 				tmp_atom[atom_group*j:atom_group*(j+1)] = ele[mbe_terms[i][j]]
 				tmp_coord[atom_group*j:atom_group*(j+1)] = xyz[mbe_terms[i][j]]
-			tmp_mol = Frag(tmp_atom, tmp_coord, mbe_terms[i], mbe_dist[i], atom_group)
+			tmp_mol = Frag(tmp_atom, tmp_coord, mbe_terms[i], mbe_dist[i], atom_group, cutoff, center_atom)
 			mbe_frags.append(tmp_mol)
 		self.mbe_frags[order]=mbe_frags
+
+		dist_mbe_frags = []
+		for i in range (0, dist_mbe_terms_num):
+                        tmp_atom = np.zeros(order*atom_group)
+                        tmp_coord = np.zeros((order*atom_group, 3))
+                        for j in range (0, order):
+                                tmp_atom[atom_group*j:atom_group*(j+1)] = ele[dist_mbe_terms[i][j]]
+                                tmp_coord[atom_group*j:atom_group*(j+1)] = xyz[dist_mbe_terms[i][j]]
+                        tmp_mol = Frag(tmp_atom, tmp_coord, dist_mbe_terms[i], dist_mbe_dist[i], atom_group, cutoff, center_atom, True)
+                        dist_mbe_frags.append(tmp_mol)
+		self.dist_mbe_frags[order]=dist_mbe_frags
 		print "generated {:10d} terms for order {:d}".format(len(mbe_frags), order)
-		return mbe_frags
+		return
 
 	def Calculate_Frag_Energy(self, order):
 		if order in self.mbe_frags_energy.keys():
@@ -426,8 +449,9 @@ class Mol:
 	
 class Frag(Mol):
         """ Provides a MBE frag of  general purpose molecule"""
-        def __init__(self, atoms_ =  None, coords_ = None, index_=None, dist_=None, atom_group_=1):
+        def __init__(self, atoms_ =  None, coords_ = None, index_=None, dist_=None, atom_group_=1, cutoff_=10, center_atom_=0, scale_=False):
 		Mol.__init__(self, atoms_, coords_)
+		self.center_atom  = center_atom_
 		self.atom_group = atom_group_
 		self.FragOrder = self.coords.shape[0]/self.atom_group
 		if (index_!=None):
@@ -439,10 +463,50 @@ class Frag(Mol):
 		else:
 			self.dist = None
 		self.frag_mbe_energies=dict()
+		self.cutoff = cutoff_
+		self.scale = scale_
+		self.scale_factor = 1
+		if self.scale:
+			self.Scale_Frag()	
 		self.frag_mbe_energy = None
 		self.permute_index = range (0, self.FragOrder)	
                 return
-			
+
+	def Diople_Diople_Scale(self):
+		max_dist = max(self.dist)
+		self.scale_factor = pow(self.cutoff / max_dist,3)
+		center_of_center = (self.coords[self.center_atom]+self.coords[self.center_atom+self.atom_group])/2
+		tmp_coords = np.zeros((self.coords.shape[0],3))
+		for i in range (0, self.FragOrder):
+			move_vector = center_of_center - self.coords[self.center_atom + self.atom_group*i] 
+			move_vector = (1-self.cutoff / max_dist)*move_vector
+			for j in range (0, self.atom_group):
+				tmp_coords[i*self.atom_group + j] = self.coords[i*self.atom_group+j] + move_vector
+		self.coords = tmp_coords.copy()
+		return
+
+	def Axilrod_Teller_Scale(self):
+		max_dist = max(self.dist)
+		self.scale_factor = pow(self.cutoff/max_dist, 9)
+		center_of_center = (self.coords[self.center_atom]+self.coords[self.center_atom+self.atom_group]+self.coords[self.center_atom+self.atom_group*2])/3
+                tmp_coords = np.zeros((self.coords.shape[0],3))
+                for i in range (0, self.FragOrder):
+                        move_vector = center_of_center - self.coords[self.center_atom + self.atom_group*i]
+                        move_vector = (1-self.cutoff / max_dist)*move_vector
+                        for j in range (0, self.atom_group):
+                                tmp_coords[i*self.atom_group + j] = self.coords[i*self.atom_group+j] + move_vector
+                self.coords = tmp_coords.copy()
+		return
+		
+
+	def Scale_Frag(self): # only included the limiting formula for 2nd order (diople-diople interatcion), and 3rd order (Axilrod-Teller Potential)
+		if (self.FragOrder == 2): # scale as 1/r^3
+			self.Diople_Diople_Scale()
+		elif (self.FragOrder == 3):  # scale as 1/(r1r2r3)^3
+			self.Axilrod_Teller_Scale()
+		else:
+			self.scale_factor = 0  # no limiting formula for order larger than 3rd 
+		return
 
 	def PySCF_Frag_MBE_Energy(self,order):   # calculate the MBE of order N of each frag 
 		inner_index = range(0, self.FragOrder) 
@@ -495,28 +559,29 @@ class Frag(Mol):
 				print "PYSCF Calculation error... :",Ex
 				print "Mol.atom:", mol.atom
 				print "Pyscf string:", pyscfatomstring
-		return 0
+		return 
 
 	def PySCF_Frag_MBE_Energy_All(self):
 		for i in range (0, self.FragOrder):
 			self.PySCF_Frag_MBE_Energy(i+1)
-		return  0
+		return  
 
 
 	def Set_Frag_MBE_Energy(self):
 		self.frag_mbe_energy =  self.Frag_MBE_Energy()
-		prod = 1
-		for i in self.dist:
-			prod = i*prod
-		print "self.frag_mbe_energy", self.frag_mbe_energy
-		return 0
+		self.frag_mbe_energy = self.frag_mbe_energy  * self.scale_factor
+		#prod = 1
+		#for i in self.dist:
+		#	prod = i*prod
+		#print "self.frag_mbe_energy", self.frag_mbe_energy
+		return 
 
 	def Frag_MBE_Energy(self,  index=None):     # Get MBE energy recursively 
 		if index==None:
 			index=range(0, self.FragOrder)
 		order = len(index)
 		if order==0:
-			return 0
+			return 
 		energy = self.frag_mbe_energies[LtoS(index)] 
 		for i in range (0, order):
 			sub_index = list(itertools.combinations(index, i))

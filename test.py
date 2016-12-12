@@ -8,16 +8,16 @@ from NN_Opt import *
 
 
 # steps to train a NN-MBE model
-if (0):
+if (1):
 	#Load .xyz files.
-	if (0):
+	if (1):
 		a=MSet("He2_1") # Define our set.
-		a.ReadGDB9Unpacked("./He2_1/", mbe_order=2) # Load .xyz file into set and set maxinum many-body expansion order.
+		a.ReadGDB9Unpacked("./He2_1/", mbe_order=3) # Load .xyz file into set and set maxinum many-body expansion order.
 		a.Generate_All_MBE_term(atom_group=1, cutoff=2, center_atom=0) # Generate all the many-body terms with  certain radius cutoff.
 
 		# One can also load another set and combine with orginal one.
 		b=MSet("He2")   
-                b.ReadGDB9Unpacked("./He2/", mbe_order=2)
+                b.ReadGDB9Unpacked("./He2/", mbe_order=3)
 		b.Generate_All_MBE_term(atom_group=1, cutoff=4, center_atom=0)
                 a.CombineSet(b) 
 
@@ -53,7 +53,7 @@ if (0):
 
 
 # steps to evaluate the many-body energy using  NN-MBE model
-if (1):
+if (0):
 	# load molecule
 	a=MSet("He_opt")
 	a.ReadGDB9Unpacked("./He_opt/", mbe_order=4)
